@@ -150,29 +150,6 @@ class ConstrainedDecoder:
             committed += tok
         raise GenerationError("string value did not terminate")
 
-    # def _decode_number(self, history: List[int]) -> float:
-    #     committed = ""
-    #     for _ in range(_MAX_FIELD_TOKENS):
-    #         logits = self._adapter.logits(history)
-    #         mask = masks.number_value_mask(self._vocab, committed)
-    #         token_id = self._select(logits, mask)
-    #         tok = self._vocab.clean_string(token_id)
-    #         # A number ends when continuing would break numeric validity; the
-    #         # simplest robust rule: stop once we have a parseable number and the
-    #         # model's top valid token is no longer a digit/./-. Here we stop when
-    #         # the next masked selection would be non-numeric by trying to parse.
-    #         trial = committed + tok
-    #         if not masks._is_number_prefix(trial):
-    #             break
-    #         history.append(token_id)
-    #         committed += tok
-    #         if self._number_complete(committed, history):
-    #             break
-    #     try:
-    #         return float(committed)
-    #     except ValueError as exc:
-    #         raise GenerationError(f"invalid number {committed!r}") from exc
-
     def _decode_number(self, history: List[int]) -> float:
         """Generate a numeric value, stopping when the model selects a structural
         terminator (',' or '}') -- NOT when the value merely parses. This mirrors
