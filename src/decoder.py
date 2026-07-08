@@ -41,17 +41,15 @@ class ConstrainedDecoder:
         functions: List[FunctionDefinition],
     ) -> FunctionCallResult:
         """Produce a validated FunctionCallResult for `prompt`."""
-        history: List[int] = self._adapter.encode(self._build_preamble(prompt))
-
+        history: List[int] = self._adapter.encode(self.build_preamble(prompt))
         name = self._decode_tool_name(history, functions)
         chosen = next(f for f in functions if f.name == name)
         parameters = self._decode_parameters(history, chosen)
 
         return FunctionCallResult(prompt=prompt, name=name, parameters=parameters)
 
-    # -- skeleton helpers ----------------------------------------------------
 
-    def _build_preamble(self, prompt: str) -> str:
+    def build_preamble(self, prompt: str) -> str:
         """The instruction + the opening skeleton up to the first hole (the name).
 
         We commit the structure `{"name": "` ourselves; the model never decides
