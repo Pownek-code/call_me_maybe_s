@@ -24,7 +24,7 @@ _DEFAULT_INPUT = Path("data/input/function_calling_tests.json")
 _DEFAULT_OUTPUT = Path("data/output/function_calling_results.json")
 
 
-def _parse_args(argv: List[str]) -> argparse.Namespace:
+def parse_cli_args(argv: List[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="src", description="Constrained function-calling generator.")
     parser.add_argument("--functions_definition", type=Path, default=_DEFAULT_FUNCTIONS)
     parser.add_argument("--input", type=Path, default=_DEFAULT_INPUT)
@@ -55,7 +55,7 @@ def _run(args: argparse.Namespace) -> None:
 
 
 def main(argv: List[str] | None = None) -> int:
-    args = _parse_args(sys.argv[1:] if argv is None else argv)
+    args = parse_cli_args(sys.argv[1:] if argv is None else argv)
     try:
         _run(args)
     except CallMeMaybeError as exc:
