@@ -32,7 +32,7 @@ def parse_cli_args(argv: List[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _run(args: argparse.Namespace) -> None:
+def run(args: argparse.Namespace) -> None:
     functions = load_functions(args.functions_definition)
     prompts = load_prompts(args.input)
 
@@ -57,7 +57,7 @@ def _run(args: argparse.Namespace) -> None:
 def main(argv: List[str] | None = None) -> int:
     args = parse_cli_args(sys.argv[1:] if argv is None else argv)
     try:
-        _run(args)
+        run(args)
     except CallMeMaybeError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

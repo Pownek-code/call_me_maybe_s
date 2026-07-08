@@ -20,7 +20,7 @@ from .schemas import FunctionCallResult, FunctionDefinition, TestPrompt
 
 def load_functions(path: Path) -> List[FunctionDefinition]:
     """Parse functions_definition.json into validated FunctionDefinition models."""
-    raw = _read_json_array(path)
+    raw = read_json_array(path)
     try:
         return [FunctionDefinition.model_validate(item) for item in raw]
     except ValidationError as exc:
@@ -29,7 +29,7 @@ def load_functions(path: Path) -> List[FunctionDefinition]:
 
 def load_prompts(path: Path) -> List[TestPrompt]:
     """Parse function_calling_tests.json into validated TestPrompt models."""
-    raw = _read_json_array(path)
+    raw = read_json_array(path)
     try:
         return [TestPrompt.model_validate(item) for item in raw]
     except ValidationError as exc:
@@ -47,7 +47,7 @@ def write_results(path: Path, results: List[FunctionCallResult]) -> None:
         raise InputError(f"could not write output to {path}: {exc}") from exc
 
 
-def _read_json_array(path: Path) -> List[object]:
+def read_json_array(path: Path) -> List[object]:
     """Read a file expected to contain a JSON array. Wrap every failure mode."""
     try:
         with open(path, "r", encoding="utf-8") as handle:
