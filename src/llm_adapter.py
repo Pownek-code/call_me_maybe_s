@@ -45,7 +45,8 @@ class LLMAdapter:
         """Next-token logits for a native list of ids. Native list in,
         native out."""
         try:
-            return self._model.get_logits_from_input_ids(input_ids)
+            raw = self._model.get_logits_from_input_ids(input_ids)
+            return [float(x) for x in raw]
         except Exception as exc:  # noqa: BLE001
             raise SDKError(f"logits call failed: {exc}") from exc
 
@@ -53,7 +54,7 @@ class LLMAdapter:
         """Path to vocab.json
         (the real SDK method is get_path_to_vocab_file)."""
         try:
-            return self._model.get_path_to_vocab_file()
+            return str(self._model.get_path_to_vocab_file())
         except Exception as exc:  # noqa: BLE001
             raise SDKError(f"could not locate vocab file: {exc}") from exc
 
@@ -61,7 +62,7 @@ class LLMAdapter:
         """Path to tokenizer.json
         (for the added_tokens overlay in Vocabulary)."""
         try:
-            return self._model.get_path_to_tokenizer_file()
+            return str(self._model.get_path_to_tokenizer_file())
         except Exception as exc:  # noqa: BLE001
             raise SDKError(f"could not locate tokenizer file: {exc}") from exc
 
