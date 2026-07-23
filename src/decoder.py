@@ -1,14 +1,20 @@
 """The constrained-decoding engine.
 
-Core idea: we build the JSON skeleton ourselves and invoke the model only at the
-holes. Every structural byte -- `{`, `"`, `:`, `,`, `}` -- is appended directly to
-the token history. The model is called only to choose a tool NAME and each
-argument VALUE, and every such call is filtered through a mask from masks.py so an
-invalid token can never be selected. The output is therefore valid-by-construction.
+Core idea: we build the JSON skeleton ourselves
+and invoke the model only at the holes. Every
+structural byte -- `{`, `"`, `:`, `,`, `}`
+-- is appended directly to the token history.
+The model is called only to choose a tool NAME and each
+argument VALUE, and every such call is filtered through
+a mask from masks.py so an invalid token can never
+be selected. The output is therefore valid-by-construction.
 
-The loop is autoregressive: current token history -> logits for the next token ->
-mask -> argmax over survivors -> append -> repeat. History is appended to only
-AFTER a token clears the mask (never a masked-out token enters history).
+The loop is autoregressive:
+current token history -> logits for the next token ->
+mask -> argmax over survivors -> append -> repeat.
+History is appended to only AFTER a token clears the mask
+(never a masked-out token enters history).
+
 """
 from __future__ import annotations
 from typing import Dict, List
@@ -21,13 +27,15 @@ from .llm_adapter import LLMAdapter
 from .schemas import FunctionCallResult, FunctionDefinition, ParamValue
 from .vocab import Vocabulary
 
-# Hard ceiling on tokens per field, so a pathological state can never loop forever.
+# Hard ceiling on tokens per field, so
+# a pathological state can never loop forever.
 _MAX_FIELD_TOKENS = 64
 _QUOTE = '"'
 
 
 class ConstrainedDecoder:
-    """Drives generation for one prompt against one set of function definitions."""
+    """Drives generation for one prompt
+    against one set of function definitions."""
 
     def __init__(self, adapter: LLMAdapter, vocab: Vocabulary) -> None:
         self._adapter = adapter
@@ -46,13 +54,17 @@ class ConstrainedDecoder:
         chosen = next(f for f in functions if f.name == name)
         parameters = self._decode_parameters(history, chosen)
 
-        return FunctionCallResult(prompt=prompt, name=name, parameters=parameters)
-
+        return FunctionCallResult(
+            prompt=prompt,
+            name=name,
+            parameters=parameters)
 
     def build_preamble(self, prompt: str) -> str:
-        """The instruction + the opening skeleton up to the first hole (the name).
+        """The instruction + the opening
+        skeleton up to the first hole (the name).
 
-        We commit the structure `{"name": "` ourselves; the model never decides
+        We commit the structure `{"name": "` ourselves;
+        the model never decides
         whether a brace or quote belongs here.
         """
         return (
@@ -62,10 +74,9 @@ class ConstrainedDecoder:
         )
 
     def _append_literal(self, history: List[int], text: str) -> None:
-        """Append the token ids for a skeleton literal we control (not the model)."""
+        """Append the token ids for a skeleton
+        literal we control (not the model)."""
         history.extend(self._adapter.encode(text))
-
-    # -- the tool-name field (the load-bearing logic) ------------------------
 
     def _decode_tool_name(
         self,
@@ -74,11 +85,16 @@ class ConstrainedDecoder:
     ) -> str:
         """Generate the tool name under the prefix+quote-commit constraint.
 
-        clean_str accumulates the committed name characters. Each step we mask to
-        (a) tokens continuing toward some allowed name, plus (b) the closing quote
-        IF clean_str is already an exact name. Termination is the model selecting
-        the closing quote while clean_str is exact -- NOT clean_str merely being a
-        name. That deferral keeps fn_add and fn_add_numbers both reachable.
+        clean_str accumulates the committed
+        name characters. Each step we mask to
+        (a) tokens continuing toward some allowed
+        name, plus (b) the closing quote
+        IF clean_str is already an exact name.
+        Termination is the model selecting
+        the closing quote while clean_str
+        is exact -- NOT clean_str merely being a
+        name. That deferral keeps
+        fn_add and fn_add_numbers both reachable.
         """
         allowed = [f.name for f in functions]
         clean_str = ""
@@ -99,15 +115,14 @@ class ConstrainedDecoder:
             f"tool name did not terminate; got prefix {clean_str!r}"
         )
 
-    # -- the parameters object -----------------------------------------------
-
     def _decode_parameters(
         self,
         history: List[int],
         function: FunctionDefinition,
     ) -> Dict[str, ParamValue]:
-        """Walk the function's declared parameters, generating each value under a
-        type-specific mask. Object braces, keys, colons and commas are skeleton we
+        """Walk the function's declared parameters,
+        generating each value under a type-specific mask.
+        Object braces, keys, colons and commas are skeleton we
         write; only the values come from the model."""
         result: Dict[str, ParamValue] = {}
         self._append_literal(history, '", "parameters": {')
@@ -149,10 +164,14 @@ class ConstrainedDecoder:
         raise GenerationError("string value did not terminate")
 
     def _decode_number(self, history: List[int]) -> float:
-        """Generate a numeric value, stopping when the model selects a structural
-        terminator (',' or '}') -- NOT when the value merely parses. This mirrors
-        the tool-name rule: the model picks the end, we never guess it. Without
-        this, '144' truncates to '1' the instant the first digit parses as float.
+        """Generate a numeric value, stopping
+        when the model selects a structural
+        terminator (',' or '}') -- NOT when
+        the value merely parses. This mirrors
+        the tool-name rule: the model picks
+        the end, we never guess it. Without
+        this, '144' truncates to '1'
+        the instant the first digit parses as float.
         """
         committed = ""
         for _ in range(_MAX_FIELD_TOKENS):
@@ -160,26 +179,25 @@ class ConstrainedDecoder:
             mask = masks.number_value_mask(self._vocab, committed)
             token_id = self._select(logits, mask)
             tok = self._vocab.clean_string(token_id)
-            # print(f"  num step: committed={committed!r} tok={tok!r}", file=sys.stderr)
- 
-            # The model chose the terminator: the number is done. Do NOT append it
-            # -- the skeleton (_decode_parameters) writes the comma/brace itself.
+            # The model chose the terminator: the number is done.
+            # Do NOT append it
+            # -- the skeleton (_decode_parameters)
+            # writes the comma/brace itself.
             if tok in (",", "}") and masks._is_complete_number(committed):
                 break
- 
             history.append(token_id)
             committed += tok
- 
         try:
             return float(committed)
         except ValueError as exc:
             raise GenerationError(f"invalid number {committed!r}") from exc
 
     def _number_complete(self, committed: str, history: List[int]) -> bool:
-        """A number is 'complete enough' when it parses and the model prefers to
-        emit a structural terminator next. We peek: build a number mask and see if
-        any digit still dominates; simplest safe rule is to stop when committed is
-        parseable and non-empty (the skeleton comma/brace follows)."""
+        """A number is 'complete enough' when it parses
+        and the model prefers to emit a structural terminator next.
+        We peek: build a number mask and see if any digit still dominates;
+        simplest safe rule is to stop when committed is parseable and non-empty
+        (the skeleton comma/brace follows)."""
         if committed in ("", "-"):
             return False
         try:
@@ -201,13 +219,11 @@ class ConstrainedDecoder:
                 return committed == "true"
         raise GenerationError(f"boolean did not resolve; got {committed!r}")
 
-    # -- selection -----------------------------------------------------------
-
     def _select(self, logits: List[float], mask: np.ndarray) -> int:
         """Apply the mask in-place and return the argmax survivor.
-
-        Masked positions are set to -inf so they can never be the argmax. If the
-        whole vector is masked, the constraint is unsatisfiable -- a logic fault.
+        Masked positions are set to -inf so they can never be
+        the argmax. If the whole vector is masked,
+        the constraint is unsatisfiable -- a logic fault.
         """
         arr = np.asarray(logits, dtype=np.float64)
         arr[~mask] = -np.inf
