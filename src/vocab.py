@@ -57,6 +57,25 @@ class Vocabulary:
         self._load_base_vocab(vocab_json_path)
         self._load_added_tokens(tokenizer_json_path)
         self._mark_phantoms()
+        self._build_lookup_array()
+
+    def _build_lookup_array(self) -> None:
+        """Precompute an id-indexed list of clean strings, built ONCE at startup.
+
+        Mask construction previously did a dict lookup per id per generated token
+        (151,936 lookups every step). Indexing a flat list instead removes that
+        cost entirely. Phantom ids get "" as a placeholder -- they are separately
+        forbidden by the base mask, so the placeholder is never selectable.
+        """
+        self._lookup: List[str] = [
+            self._id_to_str.get(i, "") for i in range(self._logits_length)
+        ]
+        # A reverse index: clean string -> the ids producing it. Lets a mask turn
+        # "which tokens are legal" into set membership instead of a 152k scan.
+        self._str_to_ids: Dict[str, List[int]] = {}
+        for token_id, text in enumerate(self._lookup):
+            if text and token_id not in self._phantom_ids:
+                self._str_to_ids.setdefault(text, []).append(token_id)
 
     # -- construction steps --------------------------------------------------
 
@@ -110,3 +129,16 @@ class Vocabulary:
         """The permanently-masked id set. The engine seeds every mask with these
         already forbidden, then applies state-specific constraints on top."""
         return self._phantom_ids
+
+    @property
+    def lookup(self) -> List[str]:
+        """Id-indexed clean strings, precomputed once. lookup[i] is id i's text."""
+        return self._lookup
+
+    def ids_for(self, text: str) -> List[int]:
+        """All selectable token ids whose clean string is exactly `text`."""
+        return self._str_to_ids.get(text, [])
+
+    def all_strings(self) -> Dict[str, List[int]]:
+        """The full clean-string -> ids index."""
+        return self._str_to_ids

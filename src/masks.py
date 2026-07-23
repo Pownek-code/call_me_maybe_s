@@ -46,88 +46,130 @@ def tool_name_mask(
     """Mask for the tool-name field, given the name chars committed so far.
 
     A candidate id is allowed when EITHER:
-      (a) it continues toward some allowed name: name.startswith(clean_str + tok),
-          i.e. clean_str + tok is still a prefix of at least one allowed name; OR
+      (a) it continues toward some allowed name: name.startswith(clean_str + tok); OR
       (b) clean_str is ALREADY an exact allowed name AND the candidate is the
-          closing quote -- this is the commit path for a prefix-name like fn_add.
+          closing quote -- the commit path for a prefix-name like fn_add.
 
-    Both may be true at once (fn_add complete, fn_add_numbers still viable): then
-    `_` survives via (a) and `"` survives via (b), and the model picks. That is
-    the termination rule described in the module docstring.
+    Both may hold at once (fn_add complete, fn_add_numbers still viable): `_`
+    survives via (a) and `"` via (b), and the model's logits pick. That deferral
+    is the termination rule.
+
+    VECTORIZATION NOTE: the naive form tests all 151,936 ids against every allowed
+    name, every generated token. Instead we derive the SET of legal continuation
+    strings from the (few) names still matching clean_str -- a handful of strings
+    -- then flip those ids on via NumPy fancy indexing. Work becomes proportional
+    to the number of allowed names, not to the vocabulary size.
     """
-    mask = _base_mask(vocab)
-    clean_is_exact_name = clean_str in allowed_names
+    mask = np.zeros(vocab.logits_length, dtype=bool)
 
-    for token_id in range(vocab.logits_length):
-        if not mask[token_id]:
-            continue  # already forbidden (phantom)
-        tok = vocab.clean_string(token_id)
+    # Only names still consistent with what we have committed can contribute.
+    viable = [n for n in allowed_names if n.startswith(clean_str)]
 
-        continues = any(name.startswith(clean_str + tok) for name in allowed_names)
-        commits = clean_is_exact_name and tok == _QUOTE
+    legal_continuations: set[str] = set()
+    for name in viable:
+        remainder = name[len(clean_str):]
+        # Every non-empty prefix of the remainder is a legal next-token string.
+        for end in range(1, len(remainder) + 1):
+            legal_continuations.add(remainder[:end])
 
-        mask[token_id] = continues or commits
+    for text in legal_continuations:
+        ids = vocab.ids_for(text)
+        if ids:
+            mask[np.asarray(ids, dtype=np.int64)] = True
+
+    # (b) the commit path: permit the closing quote once clean_str is exact.
+    if clean_str in allowed_names:
+        for token_id in vocab.ids_for(_QUOTE):
+            mask[token_id] = True
+
     return mask
 
 
 def string_value_mask(vocab: Vocabulary, committed: str) -> np.ndarray:
-    """Mask for a string parameter value. Any token is allowed except one that
-    would inject an unescaped quote mid-value; the closing quote itself is allowed
-    (it terminates the value). committed is the value chars so far (unused for the
-    permissive rule, kept for symmetry / future escape handling)."""
-    mask = _base_mask(vocab)
-    for token_id in range(vocab.logits_length):
-        if not mask[token_id]:
-            continue
-        tok = vocab.clean_string(token_id)
-        # Allow the lone closing quote (terminator) but forbid tokens that embed a
-        # quote inside other characters, which would break JSON structure.
-        if _QUOTE in tok and tok != _QUOTE:
-            mask[token_id] = False
+    """Mask for a string parameter value: any token except one embedding an
+    unescaped quote inside other characters. The lone closing quote is allowed --
+    it terminates the value.
+
+    VECTORIZATION NOTE: the set of ids containing a quote never changes, so it is
+    computed once and cached on the vocab object rather than rescanned per token.
+    """
+    forbidden = _quote_bearing_ids(vocab)
+    mask = np.ones(vocab.logits_length, dtype=bool)
+    if vocab.phantom_ids():
+        mask[np.fromiter(vocab.phantom_ids(), dtype=np.int64)] = False
+    if forbidden.size:
+        mask[forbidden] = False
     return mask
+
+
+def _quote_bearing_ids(vocab: Vocabulary) -> np.ndarray:
+    """Ids whose clean string contains a quote among other characters. Cached: the
+    answer depends only on the vocabulary, never on generation state."""
+    cached = getattr(vocab, "_quote_bearing_cache", None)
+    if cached is not None:
+        return cached  # type: ignore[no-any-return]
+    ids = [
+        i
+        for i, text in enumerate(vocab.lookup)
+        if _QUOTE in text and text != _QUOTE
+    ]
+    arr = np.asarray(ids, dtype=np.int64)
+    setattr(vocab, "_quote_bearing_cache", arr)
+    return arr
 
 
 def number_value_mask(vocab: Vocabulary, committed: str) -> np.ndarray:
-    """Mask for a numeric parameter value. A candidate is allowed iff
-    committed + tok stays a parseable numeric prefix: digits, at most one leading
-    '-', at most one '.'. Additionally, once `committed` is already a valid
-    non-empty number, the structural terminators (',' and '}') are permitted --
-    this is the number's commit signal, exactly as the closing quote commits a
-    tool name. The engine stops when the model SELECTS a terminator; it does not
-    guess where the number ends."""
-    mask = _base_mask(vocab)
-    committed_is_number = _is_complete_number(committed)
-    for token_id in range(vocab.logits_length):
-        if not mask[token_id]:
-            continue
-        tok = vocab.clean_string(token_id)
-        continues = _is_number_prefix(committed + tok)
-        commits = committed_is_number and tok in (",", "}")
-        mask[token_id] = continues or commits
+    """Mask for a numeric parameter value: tokens keeping committed+tok a valid
+    numeric prefix, plus the structural terminators (',' '}') once committed is
+    already a valid number -- the number's commit signal.
+
+    VECTORIZATION NOTE: numeric tokens are a small, fixed subset of the vocabulary
+    (digits, '.', '-'), so the candidate set is computed once and cached; per step
+    we only re-test that small set instead of all 151,936 ids.
+    """
+    candidates = _numeric_candidate_ids(vocab)
+    mask = np.zeros(vocab.logits_length, dtype=bool)
+
+    lookup = vocab.lookup
+    for token_id in candidates:
+        if _is_number_prefix(committed + lookup[token_id]):
+            mask[token_id] = True
+
+    if _is_complete_number(committed):
+        for terminator in (",", "}"):
+            for token_id in vocab.ids_for(terminator):
+                mask[token_id] = True
     return mask
 
 
-def _is_complete_number(text: str) -> bool:
-    """True iff text already parses as a JSON number (non-empty, not just '-')."""
-    if text in ("", "-"):
-        return False
-    try:
-        float(text)
-        return True
-    except ValueError:
-        return False
+def _numeric_candidate_ids(vocab: Vocabulary) -> List[int]:
+    """Ids whose clean string is composed only of digits, '.', '-'. Cached: this
+    depends only on the vocabulary, so the 152k scan happens once, not per token."""
+    cached = getattr(vocab, "_numeric_candidate_cache", None)
+    if cached is not None:
+        return cached  # type: ignore[no-any-return]
+    allowed_chars = set("0123456789.-")
+    ids = [
+        i
+        for i, text in enumerate(vocab.lookup)
+        if text and set(text) <= allowed_chars
+    ]
+    setattr(vocab, "_numeric_candidate_cache", ids)
+    return ids
 
 
 def boolean_value_mask(vocab: Vocabulary, committed: str) -> np.ndarray:
-    """Mask for a boolean value: only tokens that keep committed a prefix of
-    'true' or 'false'."""
-    mask = _base_mask(vocab)
-    for token_id in range(vocab.logits_length):
-        if not mask[token_id]:
+    """Mask for a boolean value: only tokens keeping committed a prefix of 'true'
+    or 'false'. The legal set is tiny, so it is derived directly rather than by
+    scanning the vocabulary."""
+    mask = np.zeros(vocab.logits_length, dtype=bool)
+    for word in ("true", "false"):
+        if not word.startswith(committed):
             continue
-        tok = vocab.clean_string(token_id)
-        candidate = committed + tok
-        mask[token_id] = "true".startswith(candidate) or "false".startswith(candidate)
+        remainder = word[len(committed):]
+        for end in range(1, len(remainder) + 1):
+            for token_id in vocab.ids_for(remainder[:end]):
+                mask[token_id] = True
     return mask
 
 
@@ -141,6 +183,21 @@ def _is_number_prefix(text: str) -> bool:
         return False
     body = text.lstrip("-").replace(".", "", 1)
     return body.isdigit() or body == ""
+
+
+def _is_complete_number(text: str) -> bool:
+    """True iff text already parses as a JSON number (non-empty, not just '-').
+
+    Used by both the number mask (to decide when terminators become legal) and the
+    decoder (to confirm a selected terminator really ends a valid value).
+    """
+    if text in ("", "-"):
+        return False
+    try:
+        float(text)
+        return True
+    except ValueError:
+        return False
 
 
 # The dispatch dict: generation state -> the mask builder for that state. A small,
