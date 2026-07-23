@@ -1,4 +1,4 @@
-"""Entry point: `uv run python -m src [--functions_definition ...] [--input ...]
+"""Entry point: `uv run python -m src [--functions_definition ...] [--input ..]
 [--output ...]`.
 
 Wires the pieces together (adapter -> vocab -> decoder), runs every prompt, and
@@ -25,8 +25,15 @@ _DEFAULT_OUTPUT = Path("data/output/function_calling_results.json")
 
 
 def parse_cli_args(argv: List[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(prog="src", description="Constrained function-calling generator.")
-    parser.add_argument("--functions_definition", type=Path, default=_DEFAULT_FUNCTIONS)
+    parser = argparse.ArgumentParser(
+        prog="src",
+        description="Constrained function-calling generator.",
+    )
+    parser.add_argument(
+        "--functions_definition",
+        type=Path,
+        default=_DEFAULT_FUNCTIONS,
+    )
     parser.add_argument("--input", type=Path, default=_DEFAULT_INPUT)
     parser.add_argument("--output", type=Path, default=_DEFAULT_OUTPUT)
     return parser.parse_args(argv)
@@ -48,7 +55,11 @@ def run(args: argparse.Namespace) -> None:
     for entry in prompts:
         result = decoder.generate(entry.prompt, functions)
         results.append(result)
-        print(f"  {entry.prompt!r} -> {result.name}({result.parameters})", file=sys.stderr)
+        print(
+            f"  {entry.prompt!r} -> "
+            f"{result.name}({result.parameters})",
+            file=sys.stderr,
+        )
 
     write_results(args.output, results)
     print(f"Wrote {len(results)} result(s) to {args.output}", file=sys.stderr)
