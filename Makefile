@@ -23,6 +23,7 @@ lint:
 	uv run flake8 . --exclude=$(LINT_EXCLUDE)
 	uv run mypy src $(MYPY_FLAGS)
 
+
 lint-strict:
 	uv run flake8 . --exclude=$(LINT_EXCLUDE)
 	uv run mypy src --strict

@@ -10,3 +10,9 @@ dependencies = [
 
 [tool.uv.sources]
 llm-sdk = { path = "llm_sdk", editable = true }
+
+[dependency-groups]
+dev = [
+    "mypy>=2.3.0",
+]
+
